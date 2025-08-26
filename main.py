@@ -16,8 +16,6 @@ def main():
     dpg.create_viewport(title='FLX Data Analyzer', width=1280, height=720)
     dpg.setup_dearpygui()
     dpg.show_viewport()
-    dpg.set_primary_window("primary_window", True)
-    dpg.set_global_font_scale(0.5)
     dpg.start_dearpygui()
     dpg.destroy_context()
 
