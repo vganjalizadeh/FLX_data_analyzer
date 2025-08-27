@@ -16,7 +16,7 @@ class ProgressBar:
         self.tag = "progress_bar"
 
     def create(self, parent):
-        dpg.add_progress_bar(tag=self.tag, width=200, overlay="Progress", parent=parent, show=False)
+        dpg.add_progress_bar(tag=self.tag, width=200, overlay="Progress", parent=parent, show=True)
 
     def show(self):
         dpg.show_item(self.tag)

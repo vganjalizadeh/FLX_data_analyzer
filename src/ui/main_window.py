@@ -1,8 +1,40 @@
 import dearpygui.dearpygui as dpg
+import contextlib
 from .file_dialogs import FileDialogs
 from .tables import TableViewer
 from .graphs import GraphViewer
 from .widgets import StatusBar, ProgressBar
+
+@contextlib.contextmanager
+def align_items(n_cols_left: int, n_cols_right: int) -> int | str:
+	"""
+	Adds a table to align items.
+
+	Please note:
+	Many items (e.g. combo, drag_*, input_*, slider_*, listbox, progress_bar) will not display unless a positive width is set
+
+	Args:
+		n_cols_left: Align n items to the left. (n_cols_left)
+		n_cols_right: Align n items to the right (n_cols_right)
+	"""
+	if n_cols_left < 0 or n_cols_right < 0:
+		raise ValueError("Column amount must be 0 or higher")
+
+	table = dpg.add_table(resizable=False, header_row=False, policy=0)
+	for _ in range(n_cols_left - 1):
+		dpg.add_table_column(width_stretch=False, width_fixed=True, parent=table)
+	dpg.add_table_column(width_stretch=False, width_fixed=False, parent=table)
+	for _ in range(n_cols_right):
+		dpg.add_table_column(width_stretch=False, width_fixed=True, parent=table)
+	widget = dpg.add_table_row(parent=table)
+	if n_cols_left == 0:
+		dpg.add_spacer(parent=widget)
+
+	dpg.push_container_stack(widget)
+	try:
+		yield widget
+	finally:
+		dpg.pop_container_stack()
 
 class MainWindow:
     def __init__(self, app):
@@ -22,13 +54,7 @@ class MainWindow:
             self._create_menu_bar()
             
             # Main content
-            dpg.add_text("MAIN TABLE AREA", color=(0, 255, 0))
             self.table_viewer.create("primary_window")
-            
-            # Status bar
-            dpg.add_separator()
-            dpg.add_text("STATUS BAR", color=(255, 100, 100))
-            self.status_bar.create("primary_window")
         
         # Create dockable windows
         self._create_simple_dockable_windows()
@@ -122,8 +148,8 @@ class MainWindow:
         
         # Details Window - dockable
         with dpg.window(label="Details", tag="details_window", width=300, height=200, pos=[800, 450]):
-            dpg.add_text("Row Details")
-            dpg.add_text("Select a row to see details.")
+            dpg.add_text("Row Details", tag="details_title")
+            dpg.add_text("Select a row to see details.", tag="details_placeholder")
         
         # Graph Window - dockable
         with dpg.window(label="Graph", tag="graph_window", width=400, height=300, pos=[50, 400], show=False):
@@ -141,36 +167,47 @@ class MainWindow:
 
     def _create_menu_bar(self):
         with dpg.menu_bar():
-            with dpg.menu(label="File"):
-                with dpg.menu(label="Project"):
-                    dpg.add_menu_item(label="New", callback=lambda: print("New project"))
-                    dpg.add_menu_item(label="Load", callback=lambda: print("Load project"))
-                    dpg.add_menu_item(label="Save", callback=lambda: print("Save project"))
-                    dpg.add_menu_item(label="Save as..", callback=lambda: print("Save project as"))
-                    dpg.add_menu_item(label="Close", callback=lambda: print("Close project"))
-                dpg.add_separator()
-                with dpg.menu(label="FLR"):
-                    dpg.add_menu_item(label="Add", callback=lambda: print("Add FLR"))
-                    dpg.add_menu_item(label="Open from folder", callback=lambda: print("Open FLR from folder"))
-                with dpg.menu(label="FLB"):
-                    dpg.add_menu_item(label="Add", callback=lambda: print("Add FLB"))
-                    dpg.add_menu_item(label="Open from folder", callback=lambda: print("Open FLB from folder"))
-                dpg.add_separator()
-                dpg.add_menu_item(label="Exit", callback=self._exit_application)
+            # Use align_items to properly align menu items to the left and status/progress to the right
+            with align_items(1, 2):
+                # Left-aligned menu items (column 0)
+                with dpg.group(horizontal=True):
+                    with dpg.menu(label="File"):
+                        with dpg.menu(label="Project"):
+                            dpg.add_menu_item(label="New", callback=lambda: print("New project"))
+                            dpg.add_menu_item(label="Load", callback=lambda: print("Load project"))
+                            dpg.add_menu_item(label="Save", callback=lambda: print("Save project"))
+                            dpg.add_menu_item(label="Save as..", callback=lambda: print("Save project as"))
+                            dpg.add_menu_item(label="Close", callback=lambda: print("Close project"))
+                        dpg.add_separator()
+                        with dpg.menu(label="FLR"):
+                            dpg.add_menu_item(label="Add", callback=lambda: print("Add FLR"))
+                            dpg.add_menu_item(label="Open from folder", callback=lambda: print("Open FLR from folder"))
+                        with dpg.menu(label="FLB"):
+                            dpg.add_menu_item(label="Add", callback=lambda: print("Add FLB"))
+                            dpg.add_menu_item(label="Open from folder", callback=lambda: print("Open FLB from folder"))
+                        dpg.add_separator()
+                        dpg.add_menu_item(label="Exit", callback=self._exit_application)
 
-            with dpg.menu(label="View"):
-                dpg.add_menu_item(label="Show Graph", callback=lambda: dpg.show_item("graph_window"))
-                dpg.add_menu_item(label="Show Functions", callback=lambda: dpg.show_item("functions_window"))
-                dpg.add_menu_item(label="Show Details", callback=lambda: dpg.show_item("details_window"))
-                dpg.add_separator()
-                dpg.add_menu_item(label="Decrease Font Size", callback=self._decrease_font_size)
-                dpg.add_menu_item(label="Increase Font Size", callback=self._increase_font_size)
-                dpg.add_separator()
-                # dpg.add_menu_item(label="Layout Info", callback=lambda: print("Layout is automatically saved to config/layout.ini"))
+                    with dpg.menu(label="View"):
+                        dpg.add_menu_item(label="Show Graph", callback=lambda: dpg.show_item("graph_window"))
+                        dpg.add_menu_item(label="Show Functions", callback=lambda: dpg.show_item("functions_window"))
+                        dpg.add_menu_item(label="Show Details", callback=lambda: dpg.show_item("details_window"))
+                        dpg.add_separator()
+                        dpg.add_menu_item(label="Decrease Font Size", callback=self._decrease_font_size)
+                        dpg.add_menu_item(label="Increase Font Size", callback=self._increase_font_size)
+                        dpg.add_separator()
+                        # dpg.add_menu_item(label="Layout Info", callback=lambda: print("Layout is automatically saved to config/layout.ini"))
 
-            with dpg.menu(label="Plugins"):
-                # This could be populated by the plugin manager
-                pass
+                    with dpg.menu(label="Plugins"):
+                        # This could be populated by the plugin manager
+                        pass
+                
+                
+                # Progress bar in menu bar (ensure it has proper width)
+                self.progress_bar.create("menu_bar")
+                
+                # Status bar in menu bar (ensure it has proper width)
+                self.status_bar.create("menu_bar")
 
     def setup_drag_and_drop(self):
         """Sets up the drag and drop payload for file opening."""
