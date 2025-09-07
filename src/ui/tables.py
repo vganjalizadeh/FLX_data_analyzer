@@ -170,6 +170,8 @@ class TableViewer:
         if dataframe is None:
             return
 
+        dataframe = dataframe.round(2)
+        
         # Clear existing table content
         dpg.delete_item(self.tag, children_only=True)
 
@@ -179,7 +181,7 @@ class TableViewer:
 
         # Add new rows with selection capability
         for index, row in dataframe.iterrows():
-            print(index, row)
+            # print(index, row)
             with dpg.table_row(parent=self.tag, tag=f"row_{index}"):
                 # Add text items for each column
                 for col_idx, item in enumerate(row[:-1]):

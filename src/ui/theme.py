@@ -1,10 +1,28 @@
 import dearpygui.dearpygui as dpg
+import os
+import platform
 
 def setup_font():
     """Load and configure the Consolas font."""
-    with dpg.font_registry():
-        default_font = dpg.add_font("C:/Windows/Fonts/consola.ttf", 42)
-    dpg.bind_font(default_font)
+    # Check if the os is Windows and the font path exists
+    osname = platform.system()
+    print(osname)
+    if osname == "Windows": # Windows
+        if os.path.exists("C:/Windows/Fonts/consola.ttf"):
+            with dpg.font_registry():
+                default_font = dpg.add_font("C:/Windows/Fonts/consola.ttf", 42)
+            dpg.bind_font(default_font)
+        else:
+            print("Consolas font not found at C:/Windows/Fonts/consola.ttf")
+    elif osname == "Darwin":  # macOS
+        if os.path.exists("/System/Library/Fonts/Menlo.ttc"):
+            with dpg.font_registry():
+                default_font = dpg.add_font("/System/Library/Fonts/Menlo.ttc", 42)
+            dpg.bind_font(default_font)
+        else:
+            print("Menlo font not found at /System/Library/Fonts/Menlo.ttc")
+    else:
+        print("Unsupported platform for custom font setup.")
 
 def setup_theme():
     """Create and apply the custom dark blue theme."""
