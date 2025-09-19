@@ -2,7 +2,7 @@ import dearpygui.dearpygui as dpg
 import os
 import platform
 
-fontsize = 42
+fontsize = 24
 
 def setup_font():
     """Load and configure the Consolas font."""

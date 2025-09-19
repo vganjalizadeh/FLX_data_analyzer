@@ -227,7 +227,7 @@ class MainWindow:
                 
                 # Rebin value input
                 dpg.add_spacer(width=20)
-                dpg.add_text("Rebin (μs):", color=[200, 200, 200])
+                dpg.add_text("Rebin (us):", color=[200, 200, 200])
                 dpg.add_input_int(default_value=5, width=150, tag="persistent_rebin_input", 
                                 min_value=1, max_value=1000, on_enter=True,
                                 callback=lambda: self.table_viewer._update_persistent_plot())

@@ -632,7 +632,7 @@ class TableViewer:
             if isinstance(photon_data, np.ndarray):
                 # Convert to float for statistics
                 if photon_data.dtype == np.uint8:
-                    # Each byte represents photons/μs, might need scaling
+                    # Each byte represents photons/us, might need scaling
                     return photon_data.astype(np.float32)
                 return photon_data.astype(np.float32)
             
