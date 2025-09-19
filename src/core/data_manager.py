@@ -69,6 +69,9 @@ class DataManager:
         # Configure logging for this instance
         self._setup_logging(log_file, log_level)
         
+        # Create or open default database
+        self._initialize_default_database()
+        
     def _setup_logging(self, log_file=None, log_level=logging.INFO):
         """Configure logging for this DataManager instance."""
         global logger
@@ -129,6 +132,26 @@ class DataManager:
         
         format_type = "simple" if simple else "detailed"
         logger.info(f"Logging format set to: {format_type}")
+    
+    def _initialize_default_database(self):
+        """Initialize a default database if none exists."""
+        try:
+            import os
+            # Create default database in the current directory
+            default_db_path = os.path.join(os.getcwd(), 'flx_data.fldb')
+            
+            if os.path.exists(default_db_path):
+                # Open existing database
+                self.open_database(default_db_path)
+                logger.info(f"Opened existing default database: {default_db_path}")
+            else:
+                # Create new database
+                self.create_database(default_db_path)
+                self.open_database(default_db_path)
+                logger.info(f"Created new default database: {default_db_path}")
+                
+        except Exception as e:
+            logger.error(f"Failed to initialize default database: {e}")
         
     def create_database(self, db_path):
         """Create a new FLDB database."""
@@ -220,7 +243,7 @@ class DataManager:
                         f"Photon data: {file_data['photon_data'] is not None}")
                 
             # Add to database
-            with h5py.File(self.db_path, 'a', compression='gzip', compression_opts=6) as f:
+            with h5py.File(self.db_path, 'a') as f:
                 file_group = f['files'].create_group(unique_id)
                 
                 # Store metadata
@@ -233,18 +256,21 @@ class DataManager:
                 
                 # Store images
                 if file_data['alignment_image'] is not None:
-                    raw_group.create_dataset('alignment_image', data=file_data['alignment_image'])
+                    raw_group.create_dataset('alignment_image', data=file_data['alignment_image'],
+                                            compression='gzip', compression_opts=6)
                 else:
                     raw_group.create_dataset('alignment_image', data=json.dumps(None))
                     
                 if file_data['laser_on_image'] is not None:
-                    raw_group.create_dataset('laser_on_image', data=file_data['laser_on_image'])
+                    raw_group.create_dataset('laser_on_image', data=file_data['laser_on_image'],
+                                            compression='gzip', compression_opts=6)
                 else:
                     raw_group.create_dataset('laser_on_image', data=json.dumps(None))
                 
                 # Store photon data
                 if file_data['photon_data'] is not None:
-                    raw_group.create_dataset('photon_data', data=file_data['photon_data'])
+                    raw_group.create_dataset('photon_data', data=file_data['photon_data'], 
+                                            compression='gzip', compression_opts=6)
                 else:
                     raw_group.create_dataset('photon_data', data=json.dumps(None))
                 
@@ -285,7 +311,7 @@ class DataManager:
                 photon_data = np.frombuffer(f.read(), dtype=np.uint8)
             
             # Add to database with template structure
-            with h5py.File(self.db_path, 'a', compression='gzip', compression_opts=6) as f:
+            with h5py.File(self.db_path, 'a') as f:
                 file_group = f['files'].create_group(unique_id)
                 
                 # Store minimal metadata
@@ -337,7 +363,7 @@ class DataManager:
                 raw_data = np.frombuffer(f.read(), dtype=np.uint8)
             
             # Add to database with template structure
-            with h5py.File(self.db_path, 'a', compression='gzip', compression_opts=6) as f:
+            with h5py.File(self.db_path, 'a') as f:
                 file_group = f['files'].create_group(unique_id)
                 
                 # Store minimal metadata
@@ -384,7 +410,7 @@ class DataManager:
                 
             analysis_id = str(uuid.uuid4())
             
-            with h5py.File(self.db_path, 'a', compression='gzip', compression_opts=6) as f:
+            with h5py.File(self.db_path, 'a') as f:
                 if file_id not in f['files']:
                     logger.error(f"File ID {file_id} not found in database")
                     return None
@@ -438,8 +464,17 @@ class DataManager:
                 raw_data = {}
                 for key in file_group['raw_data'].keys():
                     data = file_group['raw_data'][key][()]
-                    if isinstance(data, bytes) and data.startswith(b'null'):
-                        raw_data[key] = None
+                    if isinstance(data, bytes):
+                        try:
+                            # Try to decode as JSON first
+                            decoded = data.decode('utf-8')
+                            if decoded == 'null':
+                                raw_data[key] = None
+                            else:
+                                raw_data[key] = json.loads(decoded)
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            # If it's not JSON, it might be binary image data
+                            raw_data[key] = data
                     else:
                         raw_data[key] = data
                 
@@ -464,19 +499,43 @@ class DataManager:
             return None
     
     def list_files(self):
-        """List all files in the database."""
+        """List all files in the database and return as DataFrame."""
         try:
             if not self.db_path:
                 logger.error("No database opened")
-                return []
+                return pd.DataFrame(columns=["File ID", "File Name", "File Type", "Date Added", "File Size", "Status"])
                 
             with h5py.File(self.db_path, 'r') as f:
                 file_index = json.loads(f['metadata']['file_index'][()])
-                return file_index
+                
+                if not file_index:
+                    # Return empty DataFrame with proper columns
+                    return pd.DataFrame(columns=["File ID", "File Name", "File Type", "Date Added", "File Size", "Status"])
+                
+                # Convert file_index dictionary to DataFrame
+                records = []
+                for file_id, file_info in file_index.items():
+                    # Extract filename from original_path
+                    original_path = file_info.get('original_path', 'Unknown')
+                    file_name = os.path.basename(original_path) if original_path != 'Unknown' else 'Unknown'
+                    
+                    record = {
+                        "File ID": file_id,
+                        "File Name": file_name,
+                        "File Type": file_info.get('file_type', 'Unknown'),
+                        "Date Added": file_info.get('added', 'Unknown'),
+                        "File Size": file_info.get('file_size', 'N/A'),
+                        "Status": file_info.get('status', 'Active')
+                    }
+                    records.append(record)
+                
+                df = pd.DataFrame(records)
+                logger.debug(f"Retrieved {len(df)} files from database")
+                return df
                 
         except Exception as e:
             logger.error(f"Error listing files: {e}")
-            return []
+            return pd.DataFrame(columns=["File ID", "File Name", "File Type", "Date Added", "File Size", "Status"])
     
     def delete_file(self, file_id):
         """Delete a file from the database."""
@@ -511,6 +570,113 @@ class DataManager:
             return False
         except Exception as e:
             logger.critical(f"Critical error deleting file '{file_id}': {e}")
+            return False
+
+    def duplicate_file(self, file_id):
+        """Duplicate a file in the database."""
+        logger.debug(f"Attempting to duplicate file: {file_id}")
+        try:
+            if not self.db_path:
+                logger.error("Cannot duplicate file: No database is currently opened")
+                return None
+                
+            with h5py.File(self.db_path, 'a') as f:
+                if file_id not in f['files']:
+                    logger.warning(f"File ID '{file_id}' not found in database")
+                    return None
+                
+                # Generate new unique ID for the duplicate
+                new_file_id = str(uuid.uuid4())
+                logger.debug(f"Generated new ID for duplicate: {new_file_id}")
+                
+                # Copy the entire file structure
+                f.copy(f'files/{file_id}', f['files'], name=new_file_id)
+                
+                # Update file index with duplicate information
+                file_index = json.loads(f['metadata']['file_index'][()])
+                if file_id in file_index:
+                    duplicate_info = file_index[file_id].copy()
+                    
+                    # Modify the duplicate's metadata
+                    original_name = duplicate_info.get('file_name', duplicate_info.get('original_path', ''))
+                    if original_name:
+                        # Extract filename and add _copy suffix
+                        import os
+                        name, ext = os.path.splitext(os.path.basename(original_name))
+                        duplicate_info['file_name'] = f"{name}_copy{ext}"
+                        if 'original_path' in duplicate_info:
+                            path_dir = os.path.dirname(duplicate_info['original_path'])
+                            duplicate_info['original_path'] = os.path.join(path_dir, f"{name}_copy{ext}")
+                    
+                    duplicate_info['duplicated_from'] = file_id
+                    duplicate_info['duplicated_at'] = datetime.now().isoformat()
+                    duplicate_info['added'] = datetime.now().isoformat()
+                    
+                    file_index[new_file_id] = duplicate_info
+                    
+                    # Update the dataset
+                    del f['metadata']['file_index']
+                    f['metadata'].create_dataset('file_index', data=json.dumps(file_index))
+                    logger.debug("Updated file index after duplication")
+            
+            logger.info(f"Successfully duplicated file '{file_id}' -> '{new_file_id}'")
+            return new_file_id
+            
+        except Exception as e:
+            logger.error(f"Error duplicating file '{file_id}': {e}")
+            return None
+
+    def rename_file(self, file_id, new_name):
+        """Rename a file in the database (updates file_name in metadata)."""
+        logger.debug(f"Attempting to rename file: {file_id} -> {new_name}")
+        try:
+            if not self.db_path:
+                logger.error("Cannot rename file: No database is currently opened")
+                return False
+                
+            if not new_name or not new_name.strip():
+                logger.error("New file name cannot be empty")
+                return False
+                
+            with h5py.File(self.db_path, 'a') as f:
+                if file_id not in f['files']:
+                    logger.warning(f"File ID '{file_id}' not found in database")
+                    return False
+                
+                # Update file index with new name
+                file_index = json.loads(f['metadata']['file_index'][()])
+                if file_id in file_index:
+                    file_index[file_id]['file_name'] = new_name.strip()
+                    file_index[file_id]['renamed_at'] = datetime.now().isoformat()
+                    
+                    # Update the dataset
+                    del f['metadata']['file_index']
+                    f['metadata'].create_dataset('file_index', data=json.dumps(file_index))
+                    logger.debug("Updated file index after rename")
+                
+                # Also update metadata in the file group if it exists
+                if 'metadata' in f[f'files/{file_id}'] and 'file_metadata' in f[f'files/{file_id}/metadata']:
+                    try:
+                        metadata_str = f[f'files/{file_id}/metadata/file_metadata'][()]
+                        if isinstance(metadata_str, bytes):
+                            metadata_str = metadata_str.decode('utf-8')
+                        
+                        metadata = json.loads(metadata_str)
+                        metadata['file_name'] = new_name.strip()
+                        metadata['renamed_at'] = datetime.now().isoformat()
+                        
+                        # Update the metadata dataset
+                        del f[f'files/{file_id}/metadata/file_metadata']
+                        f[f'files/{file_id}/metadata'].create_dataset('file_metadata', data=json.dumps(metadata))
+                        logger.debug("Updated file metadata after rename")
+                    except (json.JSONDecodeError, KeyError) as e:
+                        logger.debug(f"Could not update file metadata: {e}")
+            
+            logger.info(f"Successfully renamed file '{file_id}' to '{new_name}'")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error renaming file '{file_id}': {e}")
             return False
     
     def merge_databases(self, other_db_path):
@@ -636,15 +802,14 @@ class DataManager:
                 logger.debug(f"Database statistics: {total_files} files, types: {file_types}")
                 
                 file_size_bytes = os.path.getsize(self.db_path)
-                file_size_mb = file_size_bytes / (1024 * 1024)
+                file_size_mb = int(file_size_bytes / (1024 * 1024))
                 
                 result = {
-                    'database_info': db_info,
-                    'total_files': total_files,
-                    'file_types': file_types,
-                    'database_path': self.db_path,
-                    'file_size_mb': file_size_mb,
-                    'file_size_bytes': file_size_bytes
+                    'database info': db_info,
+                    'total files': total_files,
+                    'file types': file_types,
+                    'database path': self.db_path,
+                    'file size (MB)': file_size_mb
                 }
                 
                 logger.debug("Successfully retrieved database information")
@@ -662,3 +827,30 @@ class DataManager:
         except Exception as e:
             logger.critical(f"Critical error getting database info: {e}")
             return None
+
+    # Legacy methods for backward compatibility
+    def load_csv(self, file_path):
+        """Legacy method to load CSV files."""
+        try:
+            self.legacy_data = pd.read_csv(file_path)
+            logger.info(f"Loaded CSV file: {file_path}")
+        except Exception as e:
+            logger.error(f"Error loading CSV file {file_path}: {e}")
+            self.legacy_data = pd.DataFrame()
+
+    def get_data(self):
+        """Legacy method to get loaded CSV data."""
+        if hasattr(self, 'legacy_data'):
+            return self.legacy_data
+        return pd.DataFrame()
+
+    def save_csv(self, file_path):
+        """Legacy method to save CSV files."""
+        try:
+            if hasattr(self, 'legacy_data'):
+                self.legacy_data.to_csv(file_path, index=False)
+                logger.info(f"Saved CSV file: {file_path}")
+            else:
+                logger.warning("No data to save")
+        except Exception as e:
+            logger.error(f"Error saving CSV file {file_path}: {e}")

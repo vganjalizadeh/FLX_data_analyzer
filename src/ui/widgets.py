@@ -11,6 +11,10 @@ class StatusBar:
     def set_text(self, text):
         dpg.set_value(self.tag, text)
 
+    def set_status(self, status):
+        """Set the status text (alias for set_text for compatibility)."""
+        self.set_text(status)
+
 class ProgressBar:
     def __init__(self):
         self.tag = "progress_bar"

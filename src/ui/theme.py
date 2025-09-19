@@ -2,6 +2,8 @@ import dearpygui.dearpygui as dpg
 import os
 import platform
 
+fontsize = 42
+
 def setup_font():
     """Load and configure the Consolas font."""
     # Check if the os is Windows and the font path exists
@@ -10,14 +12,14 @@ def setup_font():
     if osname == "Windows": # Windows
         if os.path.exists("C:/Windows/Fonts/consola.ttf"):
             with dpg.font_registry():
-                default_font = dpg.add_font("C:/Windows/Fonts/consola.ttf", 42)
+                default_font = dpg.add_font("C:/Windows/Fonts/consola.ttf", fontsize)
             dpg.bind_font(default_font)
         else:
             print("Consolas font not found at C:/Windows/Fonts/consola.ttf")
     elif osname == "Darwin":  # macOS
         if os.path.exists("/System/Library/Fonts/Menlo.ttc"):
             with dpg.font_registry():
-                default_font = dpg.add_font("/System/Library/Fonts/Menlo.ttc", 42)
+                default_font = dpg.add_font("/System/Library/Fonts/Menlo.ttc", fontsize)
             dpg.bind_font(default_font)
         else:
             print("Menlo font not found at /System/Library/Fonts/Menlo.ttc")
@@ -37,6 +39,9 @@ def setup_theme():
             dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (75, 10, 55), category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (45, 50, 65), category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (55, 60, 75), category=dpg.mvThemeCat_Core)
+
+            # Rounded corners for modern look
+            dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 12, category=dpg.mvThemeCat_Core)
             
             # Header colors - dark blue
             dpg.add_theme_color(dpg.mvThemeCol_MenuBarBg, (51, 51, 55), category=dpg.mvThemeCat_Core)
@@ -103,7 +108,7 @@ def setup_theme():
             
             # Button colors - dark blue
             dpg.add_theme_color(dpg.mvThemeCol_Button, (40, 45, 60), category=dpg.mvThemeCat_Core)
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (50, 55, 70), category=dpg.mvThemeCat_Core)
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (150, 55, 70), category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, (60, 65, 80), category=dpg.mvThemeCat_Core)
             
             # Text colors
@@ -134,6 +139,34 @@ def setup_theme():
                 pass
     
     dpg.bind_theme(custom_theme)
+
+def create_plot_themes():
+    """Create and return plot-specific themes."""
+    themes = {}
+    
+    # Dark theme for photon data plots
+    with dpg.theme() as photon_plot_theme:
+        with dpg.theme_component(dpg.mvPlot):
+            dpg.add_theme_color(dpg.mvPlotCol_PlotBg, (10, 20, 20, 0))  # Dark gray background
+            dpg.add_theme_color(dpg.mvPlotCol_FrameBg, (255, 255, 255, 255))  # White frame
+            dpg.add_theme_color(dpg.mvPlotCol_PlotBorder, (10, 10, 10, 0))  # Dark gray border
+        with dpg.theme_component(dpg.mvLineSeries):
+            dpg.add_theme_color(dpg.mvPlotCol_Line, (100, 200, 255, 255), category=dpg.mvThemeCat_Plots)  # Light blue line
+        with dpg.theme_component(dpg.mvAll):
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (0, 0, 0, 255), category=dpg.mvThemeCat_Core)  # Black hover color
+    themes['photon_plot'] = photon_plot_theme
+    
+    # Dark theme for image plots
+    with dpg.theme() as image_plot_theme:
+        with dpg.theme_component(dpg.mvPlot):
+            dpg.add_theme_color(dpg.mvPlotCol_PlotBg, (20, 20, 20, 0))  # Very dark gray background
+            dpg.add_theme_color(dpg.mvPlotCol_FrameBg, (40, 40, 40, 255))  # Dark frame
+            dpg.add_theme_color(dpg.mvPlotCol_PlotBorder, (10, 10, 10, 0))  # Medium gray border
+        with dpg.theme_component(dpg.mvAll):
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, (0, 0, 0, 255), category=dpg.mvThemeCat_Core)  # Black hover color
+    themes['image_plot'] = image_plot_theme
+    
+    return themes
 
 def enable_dpi_awareness():
     """Enable Windows DPI awareness for crisp fonts."""
