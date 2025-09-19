@@ -226,18 +226,23 @@ class TableViewer:
     def load_database_records(self, records_df):
         """Load database records into the table with proper formatting."""
         if records_df is None or records_df.empty:
-            # Show empty table with appropriate columns
-            empty_df = pd.DataFrame(columns=["File ID", "File Name", "File Type", "Date Added", "File Size", "Status"])
+            # Show empty table with appropriate columns (replace File ID with Row)
+            empty_df = pd.DataFrame(columns=["Row", "File Name", "File Type", "Date Added", "File Size", "Status"])
             self.data = empty_df
             self.update_data(empty_df)
             return
         
-        # Store original data for row selection details
+        # Store original data for row selection details (keep File ID for operations)
         self.database_records = records_df
-        self.data = records_df
         
-        # Update the table display
-        self.update_data(records_df)
+        # Create display version with row numbers instead of File ID
+        display_df = records_df.copy()
+        display_df = display_df.drop(columns=['File ID'])
+        display_df.insert(0, 'Row', range(1, len(display_df) + 1))
+        
+        # Store display data and update table
+        self.data = display_df
+        self.update_data(display_df)
         
         print(f"Loaded {len(records_df)} database records into table")
 
