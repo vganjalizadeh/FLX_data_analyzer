@@ -231,6 +231,18 @@ class MainWindow:
                 dpg.add_input_int(default_value=5, width=150, tag="persistent_rebin_input", 
                                 min_value=1, max_value=1000, on_enter=True,
                                 callback=lambda: self.table_viewer._update_persistent_plot())
+                
+                # Analysis button
+                dpg.add_spacer(width=30)
+                dpg.add_button(label="Analyze", width=100, height=30, 
+                             tag="analyze_photon_button",
+                             callback=lambda: self.table_viewer._analyze_current_photon_data())
+            
+            # Progress bar for analysis (initially hidden)
+            with dpg.group(tag="analysis_progress_group", show=False):
+                dpg.add_text("Analyzing photon data...", color=[200, 200, 100], tag="analysis_status_text")
+                dpg.add_progress_bar(label="Analysis Progress", width=-1, height=4, tag="analysis_progress_bar")
+            
             dpg.add_spacer(height=10)
         
         # Persistent plot (initially hidden)
@@ -240,6 +252,31 @@ class MainWindow:
             dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="persistent_x_axis")
             with dpg.plot_axis(dpg.mvYAxis, label="Photon Count (Mcps)", lock_min=True, tag="persistent_y_axis"):
                 dpg.add_line_series([0,1], [15, 15], label="Photon Count", tag="persistent_line_series")
+                # Add persistent scatter series for peak markers
+                dpg.add_scatter_series([], [], label="Peak Starts", tag="peak_starts_scatter")
+                dpg.add_scatter_series([], [], label="Peak Ends", tag="peak_ends_scatter")
+        
+        dpg.bind_item_theme("persistent_photon_plot", self.table_viewer.plot_themes['photon_plot'])
+        # Apply themes to peak marker scatter series
+        with dpg.theme(tag="peak_starts_theme"):
+            with dpg.theme_component(dpg.mvScatterSeries):
+                dpg.add_theme_color(dpg.mvPlotCol_MarkerFill, [150, 255, 0, 255], category=dpg.mvThemeCat_Plots)
+                dpg.add_theme_color(dpg.mvPlotCol_MarkerOutline, [150, 255, 0, 255], category=dpg.mvThemeCat_Plots)
+                dpg.add_theme_color(dpg.mvPlotCol_Line, [150, 255, 0, 255], category=dpg.mvThemeCat_Plots)
+                dpg.add_theme_style(dpg.mvPlotStyleVar_Marker, dpg.mvPlotMarker_Plus, category=dpg.mvThemeCat_Plots)
+                dpg.add_theme_style(dpg.mvPlotStyleVar_MarkerSize, 15, category=dpg.mvThemeCat_Plots)
+        
+        with dpg.theme(tag="peak_ends_theme"):
+            with dpg.theme_component(dpg.mvScatterSeries):
+                dpg.add_theme_color(dpg.mvPlotCol_MarkerFill, [217, 95, 2, 255], category=dpg.mvThemeCat_Plots)
+                dpg.add_theme_color(dpg.mvPlotCol_MarkerOutline, [217, 95, 2, 255], category=dpg.mvThemeCat_Plots)
+                dpg.add_theme_color(dpg.mvPlotCol_Line, [217, 95, 2, 255], category=dpg.mvThemeCat_Plots)
+                dpg.add_theme_style(dpg.mvPlotStyleVar_Marker, dpg.mvPlotMarker_Plus, category=dpg.mvThemeCat_Plots)
+                dpg.add_theme_style(dpg.mvPlotStyleVar_MarkerSize, 15, category=dpg.mvThemeCat_Plots)
+        
+        # Bind themes to scatter series
+        dpg.bind_item_theme("peak_starts_scatter", "peak_starts_theme")
+        dpg.bind_item_theme("peak_ends_scatter", "peak_ends_theme")
         # dpg.set_value("persistent_line_series", [[],[]])
 
     def _load_csv(self):
@@ -303,6 +340,8 @@ class MainWindow:
                 
                 # Progress bar in menu bar (ensure it has proper width)
                 self.progress_bar.create("menu_bar")
+                self.progress_bar.set_progress(0.0)  # Start with 0% progress
+                self.progress_bar.hide()  # Start hidden
                 
                 # Status bar in menu bar (ensure it has proper width)
                 self.status_bar.create("menu_bar")
@@ -358,25 +397,49 @@ class MainWindow:
             print(f"Error processing FLZ file {file_path}: {e}")
 
     def _process_flz_folder(self, folder_path):
-        """Process all FLZ files in a folder."""
+        """Process all FLZ files in a folder with progress tracking."""
         import os
         try:
-            self.status_bar.set_status("Processing FLZ folder...")
+            self.status_bar.set_status("Scanning FLZ folder...")
+            
+            # Get list of FLZ files
+            flz_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.flz')]
+            total_files = len(flz_files)
+            
+            if total_files == 0:
+                self.status_bar.set_status("No FLZ files found in folder")
+                return
+            
+            # Show progress bar
+            self.progress_bar.show()
+            self.progress_bar.set_progress(0.0)
+            self.progress_bar.set_overlay("Adding FLZ files...")
+            
             added_count = 0
             
-            for filename in os.listdir(folder_path):
-                if filename.lower().endswith('.flz'):
-                    file_path = os.path.join(folder_path, filename)
-                    try:
-                        file_id = self.app.data_manager.add_flz_file(file_path)
-                        added_count += 1
-                        print(f"Added FLZ file: {file_id}")
-                    except Exception as e:
-                        print(f"Error processing {filename}: {e}")
+            for i, filename in enumerate(flz_files):
+                file_path = os.path.join(folder_path, filename)
+                
+                # Update progress
+                progress = (i + 1) / total_files
+                self.progress_bar.set_progress(progress)
+                self.progress_bar.set_overlay(f"FLZ: {i + 1}/{total_files}")
+                self.status_bar.set_status(f"Processing FLZ files... ({i + 1}/{total_files})")
+                
+                try:
+                    file_id = self.app.data_manager.add_flz_file(file_path)
+                    added_count += 1
+                    print(f"Added FLZ file: {file_id}")
+                except Exception as e:
+                    print(f"Error processing {filename}: {e}")
             
+            # Hide progress bar and show completion
+            self.progress_bar.hide()
             self.status_bar.set_status(f"Added {added_count} FLZ files")
             self._refresh_table()
+            
         except Exception as e:
+            self.progress_bar.hide()
             self.status_bar.set_status(f"Error processing FLZ folder: {str(e)}")
             print(f"Error processing FLZ folder {folder_path}: {e}")
 
@@ -409,25 +472,49 @@ class MainWindow:
             print(f"Error processing FLR file {file_path}: {e}")
 
     def _process_flr_folder(self, folder_path):
-        """Process all FLR files in a folder."""
+        """Process all FLR files in a folder with progress tracking."""
         import os
         try:
-            self.status_bar.set_status("Processing FLR folder...")
+            self.status_bar.set_status("Scanning FLR folder...")
+            
+            # Get list of FLR files
+            flr_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.flr')]
+            total_files = len(flr_files)
+            
+            if total_files == 0:
+                self.status_bar.set_status("No FLR files found in folder")
+                return
+            
+            # Show progress bar
+            self.progress_bar.show()
+            self.progress_bar.set_progress(0.0)
+            self.progress_bar.set_overlay("Adding FLR files...")
+            
             added_count = 0
             
-            for filename in os.listdir(folder_path):
-                if filename.lower().endswith('.flr'):
-                    file_path = os.path.join(folder_path, filename)
-                    try:
-                        file_id = self.app.data_manager.add_flr_file(file_path)
-                        added_count += 1
-                        print(f"Added FLR file: {file_id}")
-                    except Exception as e:
-                        print(f"Error processing {filename}: {e}")
+            for i, filename in enumerate(flr_files):
+                file_path = os.path.join(folder_path, filename)
+                
+                # Update progress
+                progress = (i + 1) / total_files
+                self.progress_bar.set_progress(progress)
+                self.progress_bar.set_overlay(f"FLR: {i + 1}/{total_files}")
+                self.status_bar.set_status(f"Processing FLR files... ({i + 1}/{total_files})")
+                
+                try:
+                    file_id = self.app.data_manager.add_flr_file(file_path)
+                    added_count += 1
+                    print(f"Added FLR file: {file_id}")
+                except Exception as e:
+                    print(f"Error processing {filename}: {e}")
             
+            # Hide progress bar and show completion
+            self.progress_bar.hide()
             self.status_bar.set_status(f"Added {added_count} FLR files")
             self._refresh_table()
+            
         except Exception as e:
+            self.progress_bar.hide()
             self.status_bar.set_status(f"Error processing FLR folder: {str(e)}")
             print(f"Error processing FLR folder {folder_path}: {e}")
 
@@ -460,25 +547,49 @@ class MainWindow:
             print(f"Error processing FLB file {file_path}: {e}")
 
     def _process_flb_folder(self, folder_path):
-        """Process all FLB files in a folder."""
+        """Process all FLB files in a folder with progress tracking."""
         import os
         try:
-            self.status_bar.set_status("Processing FLB folder...")
+            self.status_bar.set_status("Scanning FLB folder...")
+            
+            # Get list of FLB files
+            flb_files = [f for f in os.listdir(folder_path) if f.lower().endswith('.flb')]
+            total_files = len(flb_files)
+            
+            if total_files == 0:
+                self.status_bar.set_status("No FLB files found in folder")
+                return
+            
+            # Show progress bar
+            self.progress_bar.show()
+            self.progress_bar.set_progress(0.0)
+            self.progress_bar.set_overlay("Adding FLB files...")
+            
             added_count = 0
             
-            for filename in os.listdir(folder_path):
-                if filename.lower().endswith('.flb'):
-                    file_path = os.path.join(folder_path, filename)
-                    try:
-                        file_id = self.app.data_manager.add_flb_file(file_path)
-                        added_count += 1
-                        print(f"Added FLB file: {file_id}")
-                    except Exception as e:
-                        print(f"Error processing {filename}: {e}")
+            for i, filename in enumerate(flb_files):
+                file_path = os.path.join(folder_path, filename)
+                
+                # Update progress
+                progress = (i + 1) / total_files
+                self.progress_bar.set_progress(progress)
+                self.progress_bar.set_overlay(f"FLB: {i + 1}/{total_files}")
+                self.status_bar.set_status(f"Processing FLB files... ({i + 1}/{total_files})")
+                
+                try:
+                    file_id = self.app.data_manager.add_flb_file(file_path)
+                    added_count += 1
+                    print(f"Added FLB file: {file_id}")
+                except Exception as e:
+                    print(f"Error processing {filename}: {e}")
             
+            # Hide progress bar and show completion
+            self.progress_bar.hide()
             self.status_bar.set_status(f"Added {added_count} FLB files")
             self._refresh_table()
+            
         except Exception as e:
+            self.progress_bar.hide()
             self.status_bar.set_status(f"Error processing FLB folder: {str(e)}")
             print(f"Error processing FLB folder {folder_path}: {e}")
 

@@ -36,7 +36,7 @@ def setup_theme():
             dpg.add_theme_color(dpg.mvThemeCol_PopupBg, (25, 25, 30), category=dpg.mvThemeCat_Core)
             
             # Frame colors - dark blue tint
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (75, 10, 55), category=dpg.mvThemeCat_Core)
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (35, 5, 25), category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (45, 50, 65), category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (55, 60, 75), category=dpg.mvThemeCat_Core)
 
@@ -48,7 +48,7 @@ def setup_theme():
             dpg.add_theme_style(dpg.mvStyleVar_WindowRounding, 8, 4, category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_HeaderHovered, (70, 35, 70), category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_HeaderActive, (80, 45, 80), category=dpg.mvThemeCat_Core)
-            dpg.add_theme_color(dpg.mvThemeCol_Header, (75, 10, 55), category=dpg.mvThemeCat_Core)
+            dpg.add_theme_color(dpg.mvThemeCol_Header, (35, 5, 25), category=dpg.mvThemeCat_Core)
             
             # Table row hover and selection styles - FIX HEIGHT ISSUES
             dpg.add_theme_style(dpg.mvStyleVar_CellPadding, 4, 0, category=dpg.mvThemeCat_Core)  # Proper cell padding
@@ -60,18 +60,18 @@ def setup_theme():
             dpg.add_theme_color(dpg.mvThemeCol_TitleBgCollapsed, (35, 5, 0), category=dpg.mvThemeCat_Core)
             
             # COMPREHENSIVE tab and docking colors - FORCE override all blues
-            dpg.add_theme_color(dpg.mvThemeCol_Tab, (75, 10, 55), category=dpg.mvThemeCat_Core)
+            dpg.add_theme_color(dpg.mvThemeCol_Tab, (35, 5, 25), category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_TabHovered, (95, 15, 65), category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_TabActive, (115, 20, 75), category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_TabUnfocused, (55, 8, 40), category=dpg.mvThemeCat_Core)
-            dpg.add_theme_color(dpg.mvThemeCol_TabUnfocusedActive, (75, 10, 55), category=dpg.mvThemeCat_Core)
+            dpg.add_theme_color(dpg.mvThemeCol_TabUnfocusedActive, (35, 5, 25), category=dpg.mvThemeCat_Core)
             
             # TAB BAR SPECIFIC COLORS - this should fix the blue tab bar!
             try:
                 # These might be the specific tab bar colors
                 dpg.add_theme_color(dpg.mvThemeCol_MenuBarBg, (30, 30, 35), category=dpg.mvThemeCat_Core)  # Tab bar background
                 dpg.add_theme_color(dpg.mvThemeCol_ScrollbarBg, (30, 30, 35), category=dpg.mvThemeCat_Core)  # Sometimes used for tab bars
-                dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrab, (75, 10, 55), category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrab, (35, 5, 25), category=dpg.mvThemeCat_Core)
                 dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabHovered, (95, 15, 65), category=dpg.mvThemeCat_Core)
                 dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabActive, (115, 20, 75), category=dpg.mvThemeCat_Core)
             except:
@@ -85,12 +85,12 @@ def setup_theme():
             # Force override docking and separator colors
             dpg.add_theme_color(dpg.mvThemeCol_DockingPreview, (115, 20, 75), category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_DockingEmptyBg, (30, 30, 35), category=dpg.mvThemeCat_Core)
-            dpg.add_theme_color(dpg.mvThemeCol_Separator, (75, 10, 55), category=dpg.mvThemeCat_Core)
+            dpg.add_theme_color(dpg.mvThemeCol_Separator, (35, 5, 25), category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_SeparatorHovered, (95, 15, 65), category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_SeparatorActive, (115, 20, 75), category=dpg.mvThemeCat_Core)
             
             # Override ALL resize and grip colors
-            dpg.add_theme_color(dpg.mvThemeCol_ResizeGrip, (75, 10, 55), category=dpg.mvThemeCat_Core)
+            dpg.add_theme_color(dpg.mvThemeCol_ResizeGrip, (35, 5, 25), category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_ResizeGripHovered, (95, 15, 65), category=dpg.mvThemeCat_Core)
             dpg.add_theme_color(dpg.mvThemeCol_ResizeGripActive, (115, 20, 75), category=dpg.mvThemeCat_Core)
             

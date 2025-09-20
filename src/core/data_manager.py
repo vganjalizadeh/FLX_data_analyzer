@@ -441,6 +441,50 @@ class DataManager:
             logger.error(f"Error adding analysis result: {e}")
             return None
     
+    def update_file_analysis(self, file_id, analysis_results):
+        """Update or add photon data analysis results for a specific file."""
+        try:
+            if not self.db_path:
+                logger.error("No database opened")
+                return False
+                
+            with h5py.File(self.db_path, 'a') as f:
+                if file_id not in f['files']:
+                    logger.error(f"File ID {file_id} not found in database")
+                    return False
+                
+                file_group = f['files'][file_id]
+                
+                # Remove existing analysis results if they exist
+                if 'photon_analysis' in file_group:
+                    del file_group['photon_analysis']
+                
+                # Create new analysis group
+                analysis_group = file_group.create_group('photon_analysis')
+                
+                # Store analysis results
+                analysis_group.create_dataset('results', data=json.dumps(analysis_results))
+                
+                # Store metadata
+                metadata = {
+                    'analysis_type': 'photon_data_analysis',
+                    'created': datetime.now().isoformat(),
+                    'total_peaks': analysis_results.get('total_peak_count', 0),
+                    'flowrate': analysis_results.get('flowrate', 0),
+                    'has_peaks': len(analysis_results.get('start_bins', [])) > 0
+                }
+                analysis_group.create_dataset('metadata', data=json.dumps(metadata))
+                
+                # Update file index with analysis flag
+                self._update_file_index(file_id, {'has_analysis': True})
+            
+            logger.info(f"Updated photon analysis for file {file_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating file analysis: {e}")
+            return False
+    
     def get_file_data(self, file_id):
         """Retrieve all data for a specific file."""
         try:
@@ -478,7 +522,7 @@ class DataManager:
                     else:
                         raw_data[key] = data
                 
-                # Get analysis results
+                # Get analysis results (legacy format)
                 analysis_results = {}
                 for analysis_id in file_group['analysis'].keys():
                     analysis_group = file_group['analysis'][analysis_id]
@@ -487,11 +531,30 @@ class DataManager:
                         'metadata': json.loads(analysis_group['metadata'][()])
                     }
                 
+                # Get photon analysis results (new format)
+                photon_analysis = None
+                if 'photon_analysis' in file_group:
+                    photon_group = file_group['photon_analysis']
+                    photon_analysis = {}
+                    
+                    if 'results' in photon_group:
+                        results_data = photon_group['results'][()]
+                        if isinstance(results_data, bytes):
+                            results_data = results_data.decode('utf-8')
+                        photon_analysis['results'] = results_data
+                    
+                    if 'metadata' in photon_group:
+                        metadata_data = photon_group['metadata'][()]
+                        if isinstance(metadata_data, bytes):
+                            metadata_data = metadata_data.decode('utf-8')
+                        photon_analysis['metadata'] = json.loads(metadata_data)
+                
                 return {
                     'file_id': file_id,
                     'metadata': metadata,
                     'raw_data': raw_data,
-                    'analysis_results': analysis_results
+                    'analysis_results': analysis_results,
+                    'photon_analysis': photon_analysis
                 }
                 
         except Exception as e:
@@ -499,43 +562,184 @@ class DataManager:
             return None
     
     def list_files(self):
-        """List all files in the database and return as DataFrame."""
+        """List all files in the database and return as DataFrame with analysis results."""
+        columns = ["File ID", "File Name", "File Type", "Peak Count", "Signal CV", "Avg Background", "Avg Fluorescence", "Transit Time", "Eff. Rec. Time"]
         try:
             if not self.db_path:
                 logger.error("No database opened")
-                return pd.DataFrame(columns=["File ID", "File Name", "File Type", "Date Added", "File Size", "Status"])
+                return pd.DataFrame(columns=columns)
                 
             with h5py.File(self.db_path, 'r') as f:
                 file_index = json.loads(f['metadata']['file_index'][()])
                 
                 if not file_index:
                     # Return empty DataFrame with proper columns
-                    return pd.DataFrame(columns=["File ID", "File Name", "File Type", "Date Added", "File Size", "Status"])
+                    return pd.DataFrame(columns=columns)
                 
                 # Convert file_index dictionary to DataFrame
                 records = []
                 for file_id, file_info in file_index.items():
-                    # Extract filename from original_path
+                    # Debug: print file_info structure for problematic entries
+                    if not file_info.get('original_path') or file_info.get('original_path') == 'Unknown':
+                        logger.debug(f"File {file_id} has problematic file_info: {file_info}")
+                    
+                    # Extract filename from original_path with fallbacks
                     original_path = file_info.get('original_path', 'Unknown')
-                    file_name = os.path.basename(original_path) if original_path != 'Unknown' else 'Unknown'
+                    
+                    # Try multiple fallback sources for filename
+                    if original_path == 'Unknown' or not original_path:
+                        # Try to get filename from file_name field
+                        file_name = file_info.get('file_name', 'Unknown')
+                        if file_name == 'Unknown':
+                            # Try other possible field names
+                            file_name = file_info.get('name', f"File_{file_id}")
+                            if file_name == f"File_{file_id}":
+                                # Try to extract from any path-like field
+                                for field in file_info.values():
+                                    if isinstance(field, str) and ('/' in field or '\\' in field):
+                                        potential_name = os.path.basename(field)
+                                        if potential_name and potential_name != field:
+                                            file_name = potential_name
+                                            original_path = field
+                                            break
+                    else:
+                        file_name = os.path.basename(original_path)
+                    
+                    # Initialize analysis columns with default values
+                    peak_count = "N/A"
+                    signal_cv = "N/A"
+                    avg_background = "N/A"
+                    avg_fluorescence = "N/A"
+                    transit_time = "N/A"
+                    eff_rec_time = "N/A"
+                    
+                    # Try to get analysis results for this file
+                    try:
+                        if f'files/{file_id}/photon_analysis' in f:
+                            analysis_group = f[f'files/{file_id}/photon_analysis']
+                            if 'results' in analysis_group:
+                                results_data = analysis_group['results'][()]
+                                if isinstance(results_data, bytes):
+                                    results_data = results_data.decode('utf-8')
+                                
+                                analysis_results = json.loads(results_data)
+                                peak_count = analysis_results.get('total_peak_count', 0)
+                                signal_cv = f"{analysis_results.get('signal_cv', 0):.2f}"
+                                avg_background = f"{analysis_results.get('avg_background', 0):.1f}"
+                                avg_fluorescence = f"{analysis_results.get('avg_fl_signal', 0):.1f}"
+                                transit_time = f"{analysis_results.get('avg_particle_transit_time', 0):.2f}"
+                                eff_rec_time = f"{analysis_results.get('effective_recording_time', 0):.2f}"
+                    except Exception as e:
+                        logger.debug(f"No analysis results for file {file_id}: {e}")
+                    
+                    # Handle file type with fallbacks
+                    file_type = file_info.get('file_type', 'Unknown')
+                    if file_type == 'Unknown' and original_path != 'Unknown':
+                        # Try to infer from extension
+                        ext = os.path.splitext(original_path)[1].lower()
+                        if ext in ['.flz', '.fld']:
+                            file_type = 'flz'
+                        elif ext in ['.flr']:
+                            file_type = 'flr'
+                        elif ext in ['.flb']:
+                            file_type = 'flb'
                     
                     record = {
                         "File ID": file_id,
                         "File Name": file_name,
-                        "File Type": file_info.get('file_type', 'Unknown'),
-                        "Date Added": file_info.get('added', 'Unknown'),
-                        "File Size": file_info.get('file_size', 'N/A'),
-                        "Status": file_info.get('status', 'Active')
+                        "File Type": file_type,
+                        # "File Path": original_path,
+                        "Peak Count": peak_count,
+                        "Signal CV": signal_cv,
+                        "Avg Background": avg_background,
+                        "Avg Fluorescence": avg_fluorescence,
+                        "Transit Time": transit_time,
+                        "Eff. Rec. Time": eff_rec_time
                     }
                     records.append(record)
                 
                 df = pd.DataFrame(records)
-                logger.debug(f"Retrieved {len(df)} files from database")
+                
+                # Check if we have any entries with missing metadata and attempt repair
+                unknown_count = len(df[df['File Name'] == 'Unknown'])
+                if unknown_count > 0:
+                    logger.warning(f"Found {unknown_count} entries with missing metadata, attempting repair...")
+                    self._attempt_metadata_repair()
+                    # Re-read the data after repair
+                    return self.list_files()
+                
+                logger.debug(f"Retrieved {len(df)} files from database with analysis data")
                 return df
                 
         except Exception as e:
             logger.error(f"Error listing files: {e}")
-            return pd.DataFrame(columns=["File ID", "File Name", "File Type", "Date Added", "File Size", "Status"])
+            # return pd.DataFrame(columns=["File ID", "File Name", "File Type", "File Path", "Peak Count", "Avg Background", "Transit Time"])
+            return pd.DataFrame(columns=columns)
+    
+    def _attempt_metadata_repair(self):
+        """Attempt to repair missing metadata in database entries."""
+        try:
+            if not self.db_path:
+                return False
+            
+            with h5py.File(self.db_path, 'r+') as f:
+                file_index = json.loads(f['metadata']['file_index'][()])
+                repaired_count = 0
+                
+                for file_id, file_info in file_index.items():
+                    if not file_info.get('original_path') or file_info.get('original_path') == 'Unknown':
+                        logger.debug(f"Attempting to repair metadata for file {file_id}")
+                        
+                        # Try to find metadata in the HDF5 group
+                        if f'files/{file_id}' in f:
+                            file_group = f[f'files/{file_id}']
+                            
+                            # Check attributes for original filename
+                            for attr_name in file_group.attrs.keys():
+                                attr_value = file_group.attrs[attr_name]
+                                if isinstance(attr_value, bytes):
+                                    attr_value = attr_value.decode('utf-8', errors='ignore')
+                                
+                                if isinstance(attr_value, str) and ('/' in attr_value or '\\' in attr_value) and '.' in attr_value:
+                                    logger.info(f"Recovered path for {file_id}: {attr_value}")
+                                    file_info['original_path'] = attr_value
+                                    file_info['file_name'] = os.path.basename(attr_value)
+                                    
+                                    # Infer file type from extension
+                                    ext = os.path.splitext(attr_value)[1].lower()
+                                    if ext in ['.flz', '.fld']:
+                                        file_info['file_type'] = 'flz'
+                                    elif ext == '.flr':
+                                        file_info['file_type'] = 'flr'
+                                    elif ext == '.flb':
+                                        file_info['file_type'] = 'flb'
+                                    
+                                    repaired_count += 1
+                                    break
+                            
+                            # If no path found, create default based on available data
+                            if not file_info.get('original_path') or file_info.get('original_path') == 'Unknown':
+                                if 'raw_data' in file_group and 'photon_data' in file_group['raw_data']:
+                                    file_info['original_path'] = f"recovered_photon_data_{file_id}.flz"
+                                    file_info['file_type'] = 'flz'
+                                else:
+                                    file_info['original_path'] = f"recovered_file_{file_id}"
+                                    file_info['file_type'] = 'unknown'
+                                
+                                file_info['file_name'] = os.path.basename(file_info['original_path'])
+                                file_info['status'] = 'recovered'
+                                repaired_count += 1
+                
+                # Save repaired index
+                if repaired_count > 0:
+                    f['metadata']['file_index'][()] = json.dumps(file_index).encode('utf-8')
+                    logger.info(f"Repaired metadata for {repaired_count} database entries")
+                
+                return repaired_count > 0
+                
+        except Exception as e:
+            logger.error(f"Error during metadata repair: {e}")
+            return False
     
     def delete_file(self, file_id):
         """Delete a file from the database."""
@@ -769,7 +973,12 @@ class DataManager:
         """Update the file index with new file information."""
         with h5py.File(self.db_path, 'a') as f:
             current_index = json.loads(f['metadata']['file_index'][()])
-            current_index[file_id] = file_info
+            
+            # If file_id exists, merge with existing info instead of replacing
+            if file_id in current_index:
+                current_index[file_id].update(file_info)
+            else:
+                current_index[file_id] = file_info
             
             # Update the dataset
             del f['metadata']['file_index']

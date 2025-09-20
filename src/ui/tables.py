@@ -1,8 +1,10 @@
 import dearpygui.dearpygui as dpg
 import pandas as pd
 import numpy as np
+import threading
+import concurrent.futures
 from .theme import create_plot_themes
-from ..analysis.signal_processing import deadtime_correction
+from ..analysis.signal_processing import deadtime_correction, analyze_photon_data, analyze_photon_data_raw
 
 # Try to import FLR reading tools
 try:
@@ -29,6 +31,11 @@ class TableViewer:
         # Single plot management
         self.current_photon_data = None
         self.current_file_id = None
+        
+        # Threading for background processing
+        self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        self.processing_lock = threading.Lock()
+        self.current_processing_task = None
         
         self.data = pd.DataFrame(columns=["File name","UPC", "BG [kcps]", "FL [kcps]", "Flowrate [uL/min]", "Signal CV%"])
         for n in range(20):
@@ -225,19 +232,23 @@ class TableViewer:
 
     def load_database_records(self, records_df):
         """Load database records into the table with proper formatting."""
+        print(f"load_database_records called with {len(records_df) if records_df is not None else 0} records")
         if records_df is None or records_df.empty:
             # Show empty table with appropriate columns (replace File ID with Row)
-            empty_df = pd.DataFrame(columns=["Row", "File Name", "File Type", "Date Added", "File Size", "Status"])
+            empty_df = pd.DataFrame(columns=["Row", "File Name", "File Type", "Peak Count", "Avg Background", "Transit Time"])
             self.data = empty_df
             self.update_data(empty_df)
             return
         
-        # Store original data for row selection details (keep File ID for operations)
+        # Store original data for row selection details (keep File ID and File Path for operations)
         self.database_records = records_df
         
-        # Create display version with row numbers instead of File ID
+        # Create display version with row numbers instead of File ID (hide File Path for cleaner display)
         display_df = records_df.copy()
-        display_df = display_df.drop(columns=['File ID'])
+        columns_to_hide = ['File ID', 'File Path']
+        # Remove columns that exist in the dataframe
+        columns_to_hide = [col for col in columns_to_hide if col in display_df.columns]
+        display_df = display_df.drop(columns=columns_to_hide)
         display_df.insert(0, 'Row', range(1, len(display_df) + 1))
         
         # Store display data and update table
@@ -272,14 +283,14 @@ class TableViewer:
                 # File Information Section (left side)
                 with dpg.group():
                     dpg.add_text("File Information:", color=[200, 200, 100])
-                    dpg.add_spacer(height=5)
+                    dpg.add_spacer(height=2)
                     
                     # Display basic file information in a more compact format
                     for col_name, value in record.items():
                         with dpg.group(horizontal=True):
                             dpg.add_text(f"{col_name}:", color=[200, 200, 200])
                             dpg.add_spacer(width=10)
-                            dpg.add_text(f"{value}", color=[255, 255, 100])
+                            dpg.add_text(f"{value}", color=[255, 255, 100], wrap=300)  # Yellow color for values, wrap long text
                 
                 # Add some spacing between sections
                 dpg.add_spacer(width=30)
@@ -313,14 +324,40 @@ class TableViewer:
         # Show the details window if it's hidden
         if not dpg.is_item_shown("details_window"):
             dpg.show_item("details_window")
+        
+        # Load existing analysis results for this record
+        if file_id and self.app:
+            self._load_existing_analysis_results(file_id)
 
     def _add_detailed_file_analysis(self, file_id):
         """Add detailed file analysis including plots, statistics, and images."""
+        # Show loading indicator in the details content area
+        loading_text = dpg.add_text("Loading detailed data...", color=[200, 200, 100], parent="details_content")
+        
+        # Load data in background thread
+        future = self.thread_pool.submit(self._load_file_data, file_id)
+        future.add_done_callback(lambda f: self._on_file_data_loaded(f, file_id, loading_text))
+    
+    def _load_file_data(self, file_id):
+        """Load file data from database in background thread."""
         try:
-            # Get file data from database
             file_data = self.app.get_file_data(file_id)
+            return file_data
+        except Exception as e:
+            print(f"Error loading file data: {e}")
+            return None
+    
+    def _on_file_data_loaded(self, future, file_id, loading_text):
+        """Callback when file data loading completes."""
+        try:
+            file_data = future.result()
+            
+            # Remove loading text
+            if dpg.does_item_exist(loading_text):
+                dpg.delete_item(loading_text)
+            
             if not file_data:
-                dpg.add_text("No detailed data available", color=[255, 100, 100])
+                dpg.add_text("No detailed data available", color=[255, 100, 100], parent="details_content")
                 return
             
             # Update persistent plot with new data (this will show statistics and plot controls above)
@@ -330,7 +367,9 @@ class TableViewer:
             self._add_image_display(file_data, file_id)
             
         except Exception as e:
-            dpg.add_text(f"Error loading detailed data: {str(e)}", color=[255, 100, 100])
+            if dpg.does_item_exist(loading_text):
+                dpg.delete_item(loading_text)
+            dpg.add_text(f"Error loading detailed data: {str(e)}", color=[255, 100, 100], parent="details_content")
             print(f"Error in detailed file analysis: {e}")
 
     def _add_photon_data_analysis(self, file_data, file_id=None):
@@ -422,8 +461,8 @@ class TableViewer:
     def _add_image_display(self, file_data, file_id=None):
         """Add image display for alignment and laser on images side by side."""
         try:
-            dpg.add_spacer(height=10)
-            dpg.add_text("Images:", color=[200, 200, 100])
+            dpg.add_spacer(height=10, parent="details_content")
+            dpg.add_text("Images:", color=[200, 200, 100], parent="details_content")
             
             # Try to get images from file_data
             alignment_image = None
@@ -443,7 +482,7 @@ class TableViewer:
                 file_id = file_data.get('file_id', 'unknown') if isinstance(file_data, dict) else 'unknown'
             
             # Display images side by side
-            with dpg.group(horizontal=True):
+            with dpg.group(horizontal=True, parent="details_content"):
                 # Left side - Alignment Image
                 with dpg.group():
                     # dpg.add_text("Alignment Image", color=[150, 200, 150])
@@ -463,7 +502,7 @@ class TableViewer:
                         dpg.add_text("Not available", color=[200, 200, 200])
                 
         except Exception as e:
-            dpg.add_text(f"Error displaying images: {str(e)}", color=[255, 100, 100])
+            dpg.add_text(f"Error displaying images: {str(e)}", color=[255, 100, 100], parent="details_content")
             print(f"Error in image display: {e}")
 
     def _display_image_optimized(self, image_data, unique_tag, label=""):
@@ -478,14 +517,23 @@ class TableViewer:
                 try:
                     image_data = json.loads(image_data)
                     if image_data is None:
-                        dpg.add_text("Not available", color=[200, 200, 200])
+                        try:
+                            dpg.add_text("Not available", color=[200, 200, 200])
+                        except:
+                            print("Image not available")
                         return
                 except:
-                    dpg.add_text("Could not parse image data", color=[255, 100, 100])
+                    try:
+                        dpg.add_text("Could not parse image data", color=[255, 100, 100])
+                    except:
+                        print("Could not parse image data")
                     return
             
             if image_data is None:
-                dpg.add_text("Not available", color=[200, 200, 200])
+                try:
+                    dpg.add_text("Not available", color=[200, 200, 200])
+                except:
+                    print("Image not available")
                 return
             
             # Convert to numpy array if needed
@@ -500,7 +548,10 @@ class TableViewer:
                     if size * size == len(image_data):
                         image_data = image_data.reshape((size, size))
                     else:
-                        dpg.add_text("Invalid image dimensions", color=[255, 100, 100])
+                        try:
+                            dpg.add_text("Invalid image dimensions", color=[255, 100, 100])
+                        except:
+                            print("Invalid image dimensions")
                         return
                 
                 # Get image dimensions
@@ -510,7 +561,10 @@ class TableViewer:
                 elif len(image_data.shape) == 3:
                     height, width, channels = image_data.shape
                 else:
-                    dpg.add_text("Unsupported image format", color=[255, 100, 100])
+                    try:
+                        dpg.add_text("Unsupported image format", color=[255, 100, 100])
+                    except:
+                        print("Unsupported image format")
                     return
                 
                 # Create texture for the image
@@ -543,7 +597,10 @@ class TableViewer:
                         # RGBA image - use as is
                         rgba_data = image_data
                     else:
-                        dpg.add_text(f"Unsupported channel count: {channels}", color=[255, 100, 100])
+                        try:
+                            dpg.add_text(f"Unsupported channel count: {channels}", color=[255, 100, 100])
+                        except:
+                            print(f"Unsupported channel count: {channels}")
                         return
                 
                 # Flatten and convert to array format like in the example
@@ -585,10 +642,16 @@ class TableViewer:
                         shape_info += f"x{channels}"
                 
             else:
-                dpg.add_text("No image data", color=[200, 200, 200])
+                try:
+                    dpg.add_text("No image data", color=[200, 200, 200])
+                except:
+                    print("No image data")
                 
         except Exception as e:
-            dpg.add_text(f"Error displaying image: {str(e)}", color=[255, 100, 100])
+            try:
+                dpg.add_text(f"Error displaying image: {str(e)}", color=[255, 100, 100])
+            except:
+                print(f"Error displaying image: {str(e)}")
             print(f"Error displaying image: {e}")
             import traceback
             traceback.print_exc()
@@ -643,12 +706,18 @@ class TableViewer:
 
     def _view_file_data(self, file_id):
         """View detailed file data from database."""
+        if not self.app:
+            print("No app reference available")
+            return
+        
+        # Load data in background thread
+        future = self.thread_pool.submit(self._load_file_data, file_id)
+        future.add_done_callback(lambda f: self._on_view_file_data_loaded(f, file_id))
+    
+    def _on_view_file_data_loaded(self, future, file_id):
+        """Callback when file data loading completes for viewing."""
         try:
-            if not self.app:
-                print("No app reference available")
-                return
-            
-            file_data = self.app.get_file_data(file_id)
+            file_data = future.result()
             if file_data:
                 self._show_file_data_window(file_id, file_data)
             else:
@@ -667,7 +736,7 @@ class TableViewer:
         with dpg.window(label=f"File Data - {file_id}", tag=window_tag,
                        width=600, height=400, modal=True, show=True):
             dpg.add_text(f"File ID: {file_id}", color=[100, 200, 255])
-            dpg.add_separator()
+            # dpg.add_separator()
             
             # Display file data based on type
             if isinstance(file_data, dict):
@@ -683,7 +752,7 @@ class TableViewer:
             else:
                 dpg.add_text(f"Data: {str(file_data)}", color=[255, 255, 100], wrap=550)
             
-            dpg.add_separator()
+            # dpg.add_separator()
             dpg.add_button(label="Close", callback=lambda: dpg.delete_item(window_tag))
 
     def _export_record(self, file_id):
@@ -798,19 +867,31 @@ class TableViewer:
             row_index = user_data['row_index']
             
             if self.app and hasattr(self.app, 'delete_file'):
-                success = self.app.delete_file(file_id)
-                if success:
-                    print(f"Successfully deleted record: {file_id}")
-                    # Refresh the table
-                    self._refresh_table_data()
-                else:
-                    print(f"Failed to delete record: {file_id}")
+                # Show status message
+                print(f"Deleting record: {file_id}...")
+                
+                # Perform delete in background thread
+                future = self.thread_pool.submit(self.app.delete_file, file_id)
+                future.add_done_callback(lambda f: self._on_delete_complete(f, file_id))
             
             # Close confirmation dialog
             dpg.delete_item("delete_confirmation_dialog")
             
         except Exception as e:
             print(f"Error confirming delete: {e}")
+    
+    def _on_delete_complete(self, future, file_id):
+        """Callback when delete operation completes."""
+        try:
+            success = future.result()
+            if success:
+                print(f"Successfully deleted record: {file_id}")
+                # Refresh the table
+                self._refresh_table_data()
+            else:
+                print(f"Failed to delete record: {file_id}")
+        except Exception as e:
+            print(f"Error in delete completion callback: {e}")
 
     def _duplicate_record(self, sender, app_data, user_data):
         """Duplicate a database record."""
@@ -824,17 +905,29 @@ class TableViewer:
                 file_id = record.get('file_id', record.get('File ID', ''))
                 
                 if self.app and hasattr(self.app, 'duplicate_file'):
-                    new_file_id = self.app.duplicate_file(file_id)
-                    if new_file_id:
-                        print(f"Successfully duplicated record: {file_id} -> {new_file_id}")
-                        # Refresh the table
-                        self._refresh_table_data()
-                    else:
-                        print(f"Failed to duplicate record: {file_id}")
+                    # Show status message
+                    print(f"Duplicating record: {file_id}...")
+                    
+                    # Perform duplication in background thread
+                    future = self.thread_pool.submit(self.app.duplicate_file, file_id)
+                    future.add_done_callback(lambda f: self._on_duplicate_complete(f, file_id))
                 else:
                     print("Duplicate functionality not available")
         except Exception as e:
             print(f"Error duplicating record: {e}")
+    
+    def _on_duplicate_complete(self, future, original_file_id):
+        """Callback when duplicate operation completes."""
+        try:
+            new_file_id = future.result()
+            if new_file_id:
+                print(f"Successfully duplicated record: {original_file_id} -> {new_file_id}")
+                # Refresh the table
+                self._refresh_table_data()
+            else:
+                print(f"Failed to duplicate record: {original_file_id}")
+        except Exception as e:
+            print(f"Error in duplicate completion callback: {e}")
 
     def _rename_file(self, sender, app_data, user_data):
         """Rename the file name of a database record."""
@@ -882,13 +975,12 @@ class TableViewer:
                 return
             
             if self.app and hasattr(self.app, 'rename_file'):
-                success = self.app.rename_file(file_id, new_name.strip())
-                if success:
-                    print(f"Successfully renamed file: {file_id} -> {new_name}")
-                    # Refresh the table
-                    self._refresh_table_data()
-                else:
-                    print(f"Failed to rename file: {file_id}")
+                # Show status message
+                print(f"Renaming file: {file_id} -> {new_name}...")
+                
+                # Perform rename in background thread
+                future = self.thread_pool.submit(self.app.rename_file, file_id, new_name.strip())
+                future.add_done_callback(lambda f: self._on_rename_complete(f, file_id, new_name))
             else:
                 print("Rename functionality not available")
             
@@ -897,6 +989,19 @@ class TableViewer:
             
         except Exception as e:
             print(f"Error confirming rename: {e}")
+    
+    def _on_rename_complete(self, future, file_id, new_name):
+        """Callback when rename operation completes."""
+        try:
+            success = future.result()
+            if success:
+                print(f"Successfully renamed file: {file_id} -> {new_name}")
+                # Refresh the table
+                self._refresh_table_data()
+            else:
+                print(f"Failed to rename file: {file_id}")
+        except Exception as e:
+            print(f"Error in rename completion callback: {e}")
 
     def _delete_row(self, sender, app_data, user_data):
         """Delete a regular data row."""
@@ -965,57 +1070,39 @@ class TableViewer:
 
     def _refresh_table_data(self):
         """Refresh the table data from the database."""
+        print("_refresh_table_data called")
+        if self.app and hasattr(self.app, 'data_manager'):
+            import dearpygui.dearpygui as dpg
+            
+            def do_refresh():
+                try:
+                    # Get fresh data from database
+                    files_data = self.app.data_manager.list_files()
+                    print(f"Retrieved {len(files_data) if files_data is not None else 0} records from database")
+                    
+                    if files_data is not None and isinstance(files_data, pd.DataFrame):
+                        self.load_database_records(files_data)
+                        print(f"Table refreshed with {len(files_data)} database records after analysis")
+                    else:
+                        print("No database records found during refresh")
+                except Exception as e:
+                    print(f"Error refreshing table data: {e}")
+            
+            # Force this to run in the main thread
+            if dpg.is_dearpygui_running():
+                # Schedule for next frame if GUI is running
+                dpg.set_frame_callback(1, callback=do_refresh)
+            else:
+                # If GUI not running, execute directly
+                do_refresh()
+    
+    def _on_table_refresh_complete(self, future):
+        """Callback when table refresh completes."""
         try:
-            if self.app and hasattr(self.app, 'get_all_files'):
-                updated_records = self.app.get_all_files()
-                self.load_database_records(updated_records)
+            updated_records = future.result()
+            self.load_database_records(updated_records)
         except Exception as e:
             print(f"Error refreshing table data: {e}")
-
-    def _update_photon_plot(self, file_id, photon_data):
-        """Update the photon plot based on current control values."""
-        try:
-            # Get control values
-            deadtime_checkbox_tag = f"deadtime_checkbox_{file_id}"
-            rebin_input_tag = f"rebin_input_{file_id}"
-            plot_container_tag = f"photon_plot_container_{file_id}"
-            
-            # Check if controls exist
-            if not dpg.does_item_exist(deadtime_checkbox_tag) or not dpg.does_item_exist(rebin_input_tag):
-                return
-            
-            correct_for_deadtime = dpg.get_value(deadtime_checkbox_tag)
-            rebin = max(1, dpg.get_value(rebin_input_tag))  # Ensure minimum value of 1
-            
-            # Process the data
-            slice_arr = np.array(list(range(0, len(photon_data), rebin)) + [len(photon_data)])
-            plot_data = (np.add.reduceat(photon_data, slice_arr[:-1]) / np.diff(slice_arr)).astype(np.float32)  # in Mcps
-            
-            if correct_for_deadtime:
-                plot_data = deadtime_correction(plot_data, deadtime=29e-9)
-            
-            x_data = np.arange(len(plot_data)) * rebin * 1e-6  # Convert to seconds
-            
-            # Clear existing plot
-            if dpg.does_item_exist(plot_container_tag):
-                dpg.delete_item(plot_container_tag, children_only=True)
-            
-            # Create new plot
-            plot_tag = f"photon_plot_{file_id}"
-            with dpg.plot(label=f"Photon Count vs Time (rebinned at {rebin}us)", height=300, width=-1, 
-                         tag=plot_tag, parent=plot_container_tag):
-                # Set plot background color
-                dpg.add_plot_legend()
-                dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)")
-                with dpg.plot_axis(dpg.mvYAxis, label="Photon Count (Mcps)"):
-                    line_tag = f"line_series_{file_id}"
-                    dpg.add_line_series(x_data, plot_data, label="Photon Count", tag=line_tag)
-                
-                # Apply photon plot theme
-                dpg.bind_item_theme(plot_tag, self.plot_themes['photon_plot'])
-                
-        except Exception as e:
-            print(f"Error updating photon plot: {e}")
 
     def _load_photon_data_to_persistent_plot(self, file_data, file_id):
         """Load photon data to the persistent plot and show controls."""
@@ -1030,27 +1117,12 @@ class TableViewer:
                     photon_data = file_data['photon_data']
             
             if photon_data is not None:
-                # Process photon data for display
-                photon_data = self._process_photon_data_for_display(photon_data)
+                # Show loading indicator for processing
+                processing_text = dpg.add_text("Processing photon data...", color=[200, 200, 100], parent="details_content")
                 
-                if photon_data is None:
-                    dpg.add_text("Could not process photon data", color=[255, 100, 100])
-                    return
-                
-                # Store current data for updates
-                self.current_photon_data = photon_data
-                self.current_file_id = file_id
-                
-                # Show the persistent plot controls and plot (statistics are now in details window)
-                dpg.show_item("plot_controls_group")
-                dpg.hide_item("statistics_group")  # Hide persistent statistics since we show them in details
-                dpg.show_item("persistent_photon_plot")
-                
-                # Apply theme to the persistent plot
-                dpg.bind_item_theme("persistent_photon_plot", self.plot_themes['photon_plot'])
-                
-                # Update the plot with initial data
-                self._update_persistent_plot()
+                # Process photon data in background thread
+                future = self.thread_pool.submit(self._process_photon_data_for_display, photon_data)
+                future.add_done_callback(lambda f: self._on_photon_data_processed(f, file_id, processing_text))
                 
             else:
                 # Hide plot elements if no photon data
@@ -1065,25 +1137,76 @@ class TableViewer:
                     dpg.set_value("local_min_rate_text", "N/A")
                     dpg.set_value("local_max_rate_text", "N/A")
                 
-                dpg.add_text("No photon data available", color=[200, 200, 200])
+                dpg.add_text("No photon data available", color=[200, 200, 200], parent="details_content")
                 
         except Exception as e:
-            dpg.add_text(f"Error loading photon data: {str(e)}", color=[255, 100, 100])
+            dpg.add_text(f"Error loading photon data: {str(e)}", color=[255, 100, 100], parent="details_content")
             print(f"Error in loading photon data to persistent plot: {e}")
+    
+    def _on_photon_data_processed(self, future, file_id, processing_text):
+        """Callback when photon data processing completes."""
+        try:
+            # Remove processing text
+            if dpg.does_item_exist(processing_text):
+                dpg.delete_item(processing_text)
+            
+            photon_data = future.result()
+            
+            if photon_data is None:
+                dpg.add_text("Could not process photon data", color=[255, 100, 100], parent="details_content")
+                return
+            
+            # Store current data for updates
+            self.current_photon_data = photon_data
+            self.current_file_id = file_id
+            
+            # Show the persistent plot controls and plot (statistics are now in details window)
+            dpg.show_item("plot_controls_group")
+            dpg.hide_item("statistics_group")  # Hide persistent statistics since we show them in details
+            dpg.show_item("persistent_photon_plot")
+            
+            # Apply theme to the persistent plot
+            # dpg.bind_item_theme("persistent_photon_plot", self.plot_themes['photon_plot'])
+            
+            # Update the plot with initial data
+            self._update_persistent_plot()
+            
+        except Exception as e:
+            if dpg.does_item_exist(processing_text):
+                dpg.delete_item(processing_text)
+            dpg.add_text(f"Error processing photon data: {str(e)}", color=[255, 100, 100], parent="details_content")
+            print(f"Error in photon data processing callback: {e}")
 
     def _update_persistent_plot(self):
         """Update the persistent plot based on current control values."""
+        if self.current_photon_data is None:
+            return
+        
+        # Cancel any existing processing task
+        with self.processing_lock:
+            if self.current_processing_task and not self.current_processing_task.done():
+                self.current_processing_task.cancel()
+        
+        # Get control values
+        correct_for_deadtime = dpg.get_value("persistent_deadtime_checkbox")
+        deadtime_ns = dpg.get_value("persistent_deadtime_input")  # Get deadtime in nanoseconds
+        rebin = max(1, dpg.get_value("persistent_rebin_input"))  # Ensure minimum value of 1
+        
+        # Submit processing to background thread
+        future = self.thread_pool.submit(self._process_plot_data, 
+                                       self.current_photon_data.copy(), 
+                                       correct_for_deadtime, deadtime_ns, rebin)
+        
+        with self.processing_lock:
+            self.current_processing_task = future
+        
+        # Set callback for when processing completes
+        future.add_done_callback(self._on_plot_processing_complete)
+    
+    def _process_plot_data(self, photon_data, correct_for_deadtime, deadtime_ns, rebin):
+        """Process plot data in background thread."""
         try:
-            if self.current_photon_data is None:
-                return
-            
-            # Get control values
-            correct_for_deadtime = dpg.get_value("persistent_deadtime_checkbox")
-            deadtime_ns = dpg.get_value("persistent_deadtime_input")  # Get deadtime in nanoseconds
-            rebin = max(1, dpg.get_value("persistent_rebin_input"))  # Ensure minimum value of 1
-            
             # Process the data
-            photon_data = self.current_photon_data
             slice_arr = np.array(list(range(0, len(photon_data), rebin)) + [len(photon_data)])
             plot_data = (np.add.reduceat(photon_data, slice_arr[:-1]) / np.diff(slice_arr)).astype(np.float32)  # in Mcps
             
@@ -1093,32 +1216,350 @@ class TableViewer:
             
             x_data = np.arange(len(plot_data)) * rebin * 1e-6  # Convert to seconds
             
-            # Update plot data
-            dpg.set_value("persistent_line_series", [x_data.tolist(), plot_data.tolist()])
+            # Calculate statistics
+            statistics = {}
+            if len(photon_data) > 0:
+                statistics = {
+                    'avg_rate': np.mean(photon_data) * 1e3,  # Convert to kcps
+                    'std_rate': np.std(photon_data) * 1e3,   # Convert to kcps
+                    'min_rate': np.min(photon_data),
+                    'max_rate': np.max(photon_data)
+                }
             
-            # Update plot title
-            dpg.configure_item("persistent_photon_plot", label=f"Photon Count vs Time (rebinned at {rebin}us)")
+            return {
+                'x_data': x_data.tolist(),
+                'plot_data': plot_data.tolist(),
+                'rebin': rebin,
+                'statistics': statistics
+            }
+            
+        except Exception as e:
+            print(f"Error processing plot data: {e}")
+            return None
+    
+    def _on_plot_processing_complete(self, future):
+        """Callback when background plot processing completes."""
+        try:
+            result = future.result()
+            if result is None:
+                return
+            
+            # Update UI on main thread
+            dpg.set_value("persistent_line_series", [result['x_data'], result['plot_data']])
+            dpg.configure_item("persistent_photon_plot", label=f"Photon Count vs Time (rebinned at {result['rebin']}us)")
             
             # Update statistics
-            if len(photon_data) > 0:
-                avg_rate = np.mean(photon_data) * 1e3  # Convert to kcps
-                std_rate = np.std(photon_data) * 1e3  # Convert to kcps
-                min_rate = np.min(photon_data)
-                max_rate = np.max(photon_data)
-                
+            stats = result['statistics']
+            if stats:
                 # Update persistent plot statistics (in main window area)
                 if dpg.does_item_exist("avg_rate_text"):
-                    dpg.set_value("avg_rate_text", f"{avg_rate:.2f} kcps")
-                    dpg.set_value("std_rate_text", f"{std_rate:.2f} kcps") 
-                    dpg.set_value("min_rate_text", f"{min_rate:.2f} Mcps")
-                    dpg.set_value("max_rate_text", f"{max_rate:.2f} Mcps")
+                    dpg.set_value("avg_rate_text", f"{stats['avg_rate']:.2f} kcps")
+                    dpg.set_value("std_rate_text", f"{stats['std_rate']:.2f} kcps") 
+                    dpg.set_value("min_rate_text", f"{stats['min_rate']:.2f} Mcps")
+                    dpg.set_value("max_rate_text", f"{stats['max_rate']:.2f} Mcps")
                 
                 # Update local statistics (in details window)
                 if dpg.does_item_exist("local_avg_rate_text"):
-                    dpg.set_value("local_avg_rate_text", f"{avg_rate:.2f} kcps")
-                    dpg.set_value("local_std_rate_text", f"{std_rate:.2f} kcps") 
-                    dpg.set_value("local_min_rate_text", f"{min_rate:.2f} Mcps")
-                    dpg.set_value("local_max_rate_text", f"{max_rate:.2f} Mcps")
+                    dpg.set_value("local_avg_rate_text", f"{stats['avg_rate']:.2f} kcps")
+                    dpg.set_value("local_std_rate_text", f"{stats['std_rate']:.2f} kcps") 
+                    dpg.set_value("local_min_rate_text", f"{stats['min_rate']:.2f} Mcps")
+                    dpg.set_value("local_max_rate_text", f"{stats['max_rate']:.2f} Mcps")
                 
         except Exception as e:
-            print(f"Error updating persistent plot: {e}")
+            print(f"Error updating UI after plot processing: {e}")
+        finally:
+            # Clear the current task
+            with self.processing_lock:
+                if self.current_processing_task == future:
+                    self.current_processing_task = None
+    
+    def _analyze_current_photon_data(self):
+        """Analyze the currently loaded photon data using signal processing."""
+        if self.current_photon_data is None or self.current_file_id is None:
+            print("No photon data available for analysis")
+            return
+        
+        # Show progress indicators
+        dpg.show_item("analysis_progress_group")
+        dpg.set_value("analysis_status_text", "Preparing analysis...")
+        dpg.set_value("analysis_progress_bar", 0.1)
+        dpg.configure_item("analyze_photon_button", enabled=False)
+        
+        # Get the current file record for filename metadata
+        
+        print("Starting analysis of photon data")
+        # Start background analysis using the raw photon data
+        future = self.thread_pool.submit(self._run_photon_analysis_raw, 
+                                       self.current_photon_data.copy())
+        future.add_done_callback(self._on_analysis_complete)
+    
+    def _run_photon_analysis_raw(self, photon_data):
+        """Run the photon data analysis using raw data in background thread."""
+        try:
+            # Update progress
+            self._update_analysis_progress(0.2, "Processing photon data...")
+            
+            self._update_analysis_progress(0.4, "Running signal analysis...")
+            
+            # Call the analysis function with raw photon data
+            analysis_df, start_bins, end_bins = analyze_photon_data_raw(photon_data)
+            
+            self._update_analysis_progress(0.8, "Processing results...")
+            
+            # Extract the analysis results (skip the header row with units)
+            if len(analysis_df) > 1:
+                results_row = analysis_df.iloc[1]  # Row 1 contains the actual results
+                
+                # Create analysis results dictionary using proper pandas indexing
+                analysis_results = {
+                    'analysis_complete': True,
+                    'total_peak_count': results_row['TotalPeakCount'] if 'TotalPeakCount' in results_row.index else 0,
+                    'flowrate': results_row['AutocorrelatedVolumetricFlowRate'] if 'AutocorrelatedVolumetricFlowRate' in results_row.index else 0,
+                    'avg_background': results_row['AvgBackgroundIntensity'] if 'AvgBackgroundIntensity' in results_row.index else 0,
+                    'avg_fl_signal': results_row['AvgFLSignalIntensity'] if 'AvgFLSignalIntensity' in results_row.index else 0,
+                    'avg_particle_transit_time': results_row['AvgParticleTransitTime'] if 'AvgParticleTransitTime' in results_row.index else 0,
+                    'signal_cv': results_row['SignalCV'] if 'SignalCV' in results_row.index else 0,
+                    'signal_to_bg_ratio': results_row['SignalToBackgroundRatio'] if 'SignalToBackgroundRatio' in results_row.index else 0,
+                    'recording_time': results_row['RecordingTime'] if 'RecordingTime' in results_row.index else 0,
+                    'effective_recording_time': results_row['EffectiveRecordingTime'] if 'EffectiveRecordingTime' in results_row.index else 0,
+                    'total_photon_count': results_row['TotalPhotonCount'] if 'TotalPhotonCount' in results_row.index else 0,
+                    'start_bins': start_bins.tolist() if start_bins is not None else [],
+                    'end_bins': end_bins.tolist() if end_bins is not None else [],
+                    'warning_flags': results_row['WarningFlags'] if 'WarningFlags' in results_row.index else '',
+                    'error_flags': results_row['ErrorFlags'] if 'ErrorFlags' in results_row.index else '',
+                    'exception_message': results_row['ExceptionMessage'] if 'ExceptionMessage' in results_row.index else ''
+                }
+                
+                self._update_analysis_progress(1.0, "Analysis complete!")
+                return analysis_results
+            else:
+                raise Exception("No analysis results returned")
+                
+        except Exception as e:
+            print(f"Error in photon analysis: {e}")
+            return {'error': str(e)}
+    
+    def _run_photon_analysis(self, file_path):
+        """Run the photon data analysis in background thread."""
+        try:
+            # Update progress
+            self._update_analysis_progress(0.2, "Loading file data...")
+            
+            # Call the analysis function from signal_processing
+            analysis_df, start_bins, end_bins = analyze_photon_data(file_path)
+            
+            self._update_analysis_progress(0.8, "Processing results...")
+            
+            # Extract the analysis results (skip the header row with units)
+            if len(analysis_df) > 1:
+                results_row = analysis_df.iloc[1]  # Row 1 contains the actual results
+                
+                # Create analysis results dictionary using proper pandas indexing
+                analysis_results = {
+                    'analysis_complete': True,
+                    'total_peak_count': results_row['TotalPeakCount'] if 'TotalPeakCount' in results_row.index else 0,
+                    'flowrate': results_row['AutocorrelatedVolumetricFlowRate'] if 'AutocorrelatedVolumetricFlowRate' in results_row.index else 0,
+                    'avg_background': results_row['AvgBackgroundIntensity'] if 'AvgBackgroundIntensity' in results_row.index else 0,
+                    'avg_fl_signal': results_row['AvgFLSignalIntensity'] if 'AvgFLSignalIntensity' in results_row.index else 0,
+                    'avg_particle_transit_time': results_row['AvgParticleTransitTime'] if 'AvgParticleTransitTime' in results_row.index else 0,
+                    'signal_cv': results_row['SignalCV'] if 'SignalCV' in results_row.index else 0,
+                    'signal_to_bg_ratio': results_row['SignalToBackgroundRatio'] if 'SignalToBackgroundRatio' in results_row.index else 0,
+                    'recording_time': results_row['RecordingTime'] if 'RecordingTime' in results_row.index else 0,
+                    'total_photon_count': results_row['TotalPhotonCount'] if 'TotalPhotonCount' in results_row.index else 0,
+                    'start_bins': start_bins.tolist() if start_bins is not None else [],
+                    'end_bins': end_bins.tolist() if end_bins is not None else [],
+                    'warning_flags': results_row['WarningFlags'] if 'WarningFlags' in results_row.index else '',
+                    'error_flags': results_row['ErrorFlags'] if 'ErrorFlags' in results_row.index else '',
+                    'exception_message': results_row['ExceptionMessage'] if 'ExceptionMessage' in results_row.index else ''
+                }
+                
+                self._update_analysis_progress(1.0, "Analysis complete!")
+                return analysis_results
+            else:
+                raise Exception("No analysis results returned")
+                
+        except Exception as e:
+            print(f"Error in photon analysis: {e}")
+            return {'error': str(e)}
+    
+    def _update_analysis_progress(self, progress, status_text):
+        """Update progress bar and status text (thread-safe)."""
+        try:
+            if dpg.does_item_exist("analysis_progress_bar"):
+                dpg.set_value("analysis_progress_bar", progress)
+            if dpg.does_item_exist("analysis_status_text"):
+                dpg.set_value("analysis_status_text", status_text)
+        except:
+            pass  # Ignore UI update errors in background thread
+    
+    def _on_analysis_complete(self, future):
+        """Callback when analysis completes."""
+        print("_on_analysis_complete called")
+        try:
+            result = future.result()
+            
+            if 'error' in result:
+                self._show_analysis_error(f"Analysis failed: {result['error']}")
+                return
+            
+            # Save results to database
+            if self.app and hasattr(self.app, 'update_file_analysis'):
+                success = self.app.update_file_analysis(self.current_file_id, result)
+                if success:
+                    print(f"Analysis results saved for file: {self.current_file_id}")
+                    
+                    # Update the plot with peak indicators
+                    self._add_peak_indicators_to_plot(result.get('start_bins', []), 
+                                                     result.get('end_bins', []))
+                    
+                    # Show success message
+                    dpg.set_value("analysis_status_text", 
+                                f"Analysis complete! Found {result.get('total_peak_count', 0)} peaks")
+                    
+                    # Refresh table to show updated data - schedule in main thread
+                    print("Scheduling table refresh after analysis completion")
+                    import dearpygui.dearpygui as dpg
+                    
+                    # Try a direct call first to see if it works
+                    try:
+                        self._refresh_table_data()
+                        print("Direct table refresh completed")
+                    except Exception as e:
+                        print(f"Direct refresh failed: {e}")
+                        # Fallback to frame callback
+                        dpg.set_frame_callback(1, callback=self._refresh_table_data)
+                else:
+                    self._show_analysis_error("Failed to save analysis results to database")
+            else:
+                self._show_analysis_error("Database update method not available")
+                
+        except Exception as e:
+            self._show_analysis_error(f"Error processing analysis results: {str(e)}")
+        finally:
+            # Hide progress bar and re-enable button after 3 seconds
+            def hide_progress():
+                dpg.hide_item("analysis_progress_group")
+                dpg.configure_item("analyze_photon_button", enabled=True)
+            
+            # Use a simple timer approach
+            import time
+            import threading
+            timer = threading.Timer(3.0, hide_progress)
+            timer.start()
+    
+    def _show_analysis_error(self, error_message):
+        """Show analysis error and reset UI."""
+        print(f"Analysis error: {error_message}")
+        dpg.set_value("analysis_status_text", f"Error: {error_message}")
+        dpg.set_value("analysis_progress_bar", 0.0)
+        dpg.configure_item("analyze_photon_button", enabled=True)
+        
+        # Hide progress after 5 seconds
+        def hide_progress():
+            dpg.hide_item("analysis_progress_group")
+        
+        import threading
+        timer = threading.Timer(5.0, hide_progress)
+        timer.start()
+    
+    def _add_peak_indicators_to_plot(self, start_bins, end_bins):
+        """Update persistent scatter plot series with peak start/end markers at y=0."""
+        try:
+            if not start_bins or not end_bins:
+                # Clear scatter series if no peaks
+                if dpg.does_item_exist("peak_starts_scatter"):
+                    dpg.set_value("peak_starts_scatter", [[], []])
+                if dpg.does_item_exist("peak_ends_scatter"):
+                    dpg.set_value("peak_ends_scatter", [[], []])
+                return
+            
+            # Convert bin indices to time values (assuming 1μs per bin)
+            rebin = max(1, dpg.get_value("persistent_rebin_input"))
+            start_times = np.array(start_bins) * 1e-6  # Convert to seconds
+            end_times = np.array(end_bins) * 1e-6      # Convert to seconds
+            
+            # Check if scatter series exist
+            if not dpg.does_item_exist("peak_starts_scatter") or not dpg.does_item_exist("peak_ends_scatter"):
+                print("Peak scatter series not found")
+                return
+            
+            # Create markers at y=0 for all peaks
+            # Use all zeros for y coordinates to place markers at the bottom
+            start_y_values = np.zeros_like(start_times)
+            end_y_values = np.zeros_like(end_times)
+            
+            # Update the persistent scatter series with new data
+            dpg.set_value("peak_starts_scatter", [start_times.tolist(), start_y_values.tolist()])
+            dpg.set_value("peak_ends_scatter", [end_times.tolist(), end_y_values.tolist()])
+            
+            print(f"Updated scatter markers: {len(start_bins)} peak starts, {len(end_bins)} peak ends")
+            
+        except Exception as e:
+            print(f"Error updating peak indicators: {e}")
+    
+    def _clear_peak_indicators(self):
+        """Clear all existing peak indicators from the plot."""
+        try:
+            # Clear the persistent scatter series
+            if dpg.does_item_exist("peak_starts_scatter"):
+                dpg.set_value("peak_starts_scatter", [[], []])
+            if dpg.does_item_exist("peak_ends_scatter"):
+                dpg.set_value("peak_ends_scatter", [[], []])
+        except Exception as e:
+            print(f"Error clearing peak indicators: {e}")
+    
+    def _load_existing_analysis_results(self, file_id):
+        """Load existing analysis results for a file and update peak indicators."""
+        try:
+            if not self.app or not hasattr(self.app, 'data_manager'):
+                return
+            
+            # Get file data from database
+            file_data = self.app.get_file_data(file_id)
+            if not file_data:
+                return
+            
+            # Check if analysis results exist
+            if isinstance(file_data, dict) and 'photon_analysis' in file_data:
+                analysis_data = file_data['photon_analysis']
+                
+                if 'results' in analysis_data:
+                    # Parse results JSON
+                    import json
+                    try:
+                        if isinstance(analysis_data['results'], str):
+                            results = json.loads(analysis_data['results'])
+                        else:
+                            results = analysis_data['results']
+                        
+                        # Extract start and end bins
+                        start_bins = results.get('start_bins', [])
+                        end_bins = results.get('end_bins', [])
+                        
+                        if start_bins and end_bins:
+                            print(f"Loading {len(start_bins)} peaks from existing analysis")
+                            # Update peak indicators on the plot
+                            self._add_peak_indicators_to_plot(start_bins, end_bins)
+                            
+                    except json.JSONDecodeError as e:
+                        print(f"Error parsing analysis results: {e}")
+            else:
+                print("No existing analysis results found")        
+                        
+        except Exception as e:
+            self._clear_peak_indicators()
+            print(f"Error loading existing analysis results: {e}")
+    
+    def cleanup(self):
+        """Clean up resources, especially the thread pool."""
+        try:
+            # Cancel any pending tasks
+            with self.processing_lock:
+                if self.current_processing_task and not self.current_processing_task.done():
+                    self.current_processing_task.cancel()
+            
+            # Shutdown the thread pool
+            self.thread_pool.shutdown(wait=True, timeout=5.0)
+            print("Thread pool successfully shut down")
+        except Exception as e:
+            print(f"Error during cleanup: {e}")

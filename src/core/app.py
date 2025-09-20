@@ -142,3 +142,17 @@ class App:
             print(f"Error exporting database to {target_path}: {e}")
             if hasattr(self.main_window, 'status_bar'):
                 self.main_window.status_bar.set_status(f"Failed to export database: {str(e)}")
+    
+    def update_file_analysis(self, file_id, analysis_results):
+        """Update photon data analysis results for a file."""
+        try:
+            success = self.data_manager.update_file_analysis(file_id, analysis_results)
+            if success and hasattr(self.main_window, 'status_bar'):
+                peak_count = analysis_results.get('total_peak_count', 0)
+                self.main_window.status_bar.set_status(f"Analysis complete: {peak_count} peaks detected")
+            return success
+        except Exception as e:
+            print(f"Error updating file analysis: {e}")
+            if hasattr(self.main_window, 'status_bar'):
+                self.main_window.status_bar.set_status(f"Analysis failed: {str(e)}")
+            return False

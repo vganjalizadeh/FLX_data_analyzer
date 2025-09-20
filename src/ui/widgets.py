@@ -31,3 +31,7 @@ class ProgressBar:
     def set_progress(self, value):
         """Sets the progress value (0.0 to 1.0)."""
         dpg.set_value(self.tag, value)
+    
+    def set_overlay(self, text):
+        """Sets the overlay text on the progress bar."""
+        dpg.configure_item(self.tag, overlay=text)
